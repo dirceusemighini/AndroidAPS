@@ -7,40 +7,49 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import info.nightscout.androidaps.R
 import info.nightscout.androidaps.activities.NoSplashAppCompatActivity
+import info.nightscout.androidaps.databinding.ActivityLogsettingBinding
 import info.nightscout.androidaps.logging.L
-import kotlinx.android.synthetic.main.activity_logsetting.*
+import javax.inject.Inject
 
 class LogSettingActivity : NoSplashAppCompatActivity() {
 
+    @Inject lateinit var l: L
+
+    private lateinit var binding: ActivityLogsettingBinding
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_logsetting)
+        binding = ActivityLogsettingBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
         createViewsForSettings()
 
-        logsettings_reset.setOnClickListener {
-            L.resetToDefaults()
+        binding.reset.setOnClickListener {
+            l.resetToDefaults()
             createViewsForSettings()
         }
+        binding.ok.setOnClickListener { finish() }
     }
 
     private fun createViewsForSettings() {
-        logsettings_placeholder.removeAllViews()
-        for (element in L.getLogElements()) {
+        binding.placeholder.removeAllViews()
+        for (element in l.getLogElements()) {
             val logViewHolder = LogViewHolder(element)
-            logsettings_placeholder.addView(logViewHolder.baseView)
+            binding.placeholder.addView(logViewHolder.baseView)
         }
 
     }
 
     internal inner class LogViewHolder(element: L.LogElement) {
-        var baseView: LinearLayout = layoutInflater.inflate(R.layout.logsettings_item, null) as LinearLayout
+
+        @Suppress("InflateParams")
+        var baseView = layoutInflater.inflate(R.layout.logsettings_item, null) as LinearLayout
 
         init {
             (baseView.findViewById<View>(R.id.logsettings_description) as TextView).text = element.name
             val enabled = baseView.findViewById<CheckBox>(R.id.logsettings_visibility)
             enabled.isChecked = element.enabled
-            enabled.setOnClickListener { element.setEnabled(enabled.isChecked) }
+            enabled.setOnClickListener { element.enable(enabled.isChecked) }
         }
 
     }

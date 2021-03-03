@@ -4,148 +4,183 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import com.google.common.base.Joiner
 import com.google.common.collect.Lists
 import info.nightscout.androidaps.Constants
-import info.nightscout.androidaps.MainApp
 import info.nightscout.androidaps.R
 import info.nightscout.androidaps.data.Profile
+import info.nightscout.androidaps.databinding.DialogTemptargetBinding
 import info.nightscout.androidaps.db.Source
 import info.nightscout.androidaps.db.TempTarget
-import info.nightscout.androidaps.plugins.configBuilder.ProfileFunctions
+import info.nightscout.androidaps.interfaces.ActivePluginProvider
+import info.nightscout.androidaps.interfaces.ProfileFunction
+import info.nightscout.androidaps.plugins.configBuilder.ConstraintChecker
 import info.nightscout.androidaps.plugins.treatments.TreatmentsPlugin
-import info.nightscout.androidaps.utils.DateUtil
 import info.nightscout.androidaps.utils.DefaultValueHelper
 import info.nightscout.androidaps.utils.HtmlHelper
-import info.nightscout.androidaps.utils.OKDialog
-import info.nightscout.androidaps.utils.SP
-import kotlinx.android.synthetic.main.dialog_temptarget.*
-import kotlinx.android.synthetic.main.okcancel.*
+import info.nightscout.androidaps.utils.alertDialogs.OKDialog
+import info.nightscout.androidaps.utils.resources.ResourceHelper
 import java.text.DecimalFormat
 import java.util.*
+import javax.inject.Inject
 
 class TempTargetDialog : DialogFragmentWithDate() {
 
+    @Inject lateinit var constraintChecker: ConstraintChecker
+    @Inject lateinit var resourceHelper: ResourceHelper
+    @Inject lateinit var profileFunction: ProfileFunction
+    @Inject lateinit var defaultValueHelper: DefaultValueHelper
+    @Inject lateinit var treatmentsPlugin: TreatmentsPlugin
+    @Inject lateinit var activePlugin: ActivePluginProvider
+
+    lateinit var reasonList: List<String>
+
+    private var _binding: DialogTemptargetBinding? = null
+
+    // This property is only valid between onCreateView and
+    // onDestroyView.
+    private val binding get() = _binding!!
+
     override fun onSaveInstanceState(savedInstanceState: Bundle) {
         super.onSaveInstanceState(savedInstanceState)
-        savedInstanceState.putDouble("overview_temptarget_duration", overview_temptarget_duration.value)
-        savedInstanceState.putDouble("overview_temptarget_temptarget", overview_temptarget_temptarget.value)
+        savedInstanceState.putDouble("duration", binding.duration.value)
+        savedInstanceState.putDouble("temptarget", binding.temptarget.value)
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?,
-                              savedInstanceState: Bundle?): View? {
+                              savedInstanceState: Bundle?): View {
         onCreateViewGeneral()
-        return inflater.inflate(R.layout.dialog_temptarget, container, false)
+        _binding = DialogTemptargetBinding.inflate(inflater, container, false)
+        return binding.root
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        overview_temptarget_duration.setParams(savedInstanceState?.getDouble("overview_temptarget_duration")
-            ?: 0.0, 0.0, Constants.MAX_PROFILE_SWITCH_DURATION, 10.0, DecimalFormat("0"), false, ok)
+        binding.duration.setParams(savedInstanceState?.getDouble("duration")
+            ?: 0.0, 0.0, Constants.MAX_PROFILE_SWITCH_DURATION, 10.0, DecimalFormat("0"), false, binding.okcancel.ok)
 
-        if (ProfileFunctions.getSystemUnits() == Constants.MMOL)
-            overview_temptarget_temptarget.setParams(
-                savedInstanceState?.getDouble("overview_temptarget_temptarget")
-                    ?: Constants.MIN_TT_MMOL,
-                Constants.MIN_TT_MMOL, Constants.MAX_TT_MMOL, 0.1, DecimalFormat("0.0"), false, ok)
+        if (profileFunction.getUnits() == Constants.MMOL)
+            binding.temptarget.setParams(
+                savedInstanceState?.getDouble("temptarget")
+                    ?: 8.0,
+                Constants.MIN_TT_MMOL, Constants.MAX_TT_MMOL, 0.1, DecimalFormat("0.0"), false, binding.okcancel.ok)
         else
-            overview_temptarget_temptarget.setParams(
-                savedInstanceState?.getDouble("overview_temptarget_temptarget")
-                    ?: Constants.MIN_TT_MGDL,
-                Constants.MIN_TT_MGDL, Constants.MAX_TT_MGDL, 1.0, DecimalFormat("0"), false, ok)
+            binding.temptarget.setParams(
+                savedInstanceState?.getDouble("temptarget")
+                    ?: 144.0,
+                Constants.MIN_TT_MGDL, Constants.MAX_TT_MGDL, 1.0, DecimalFormat("0"), false, binding.okcancel.ok)
 
-        val units = ProfileFunctions.getSystemUnits()
-        overview_temptarget_units.text = if (units == Constants.MMOL) MainApp.gs(R.string.mmol) else MainApp.gs(R.string.mgdl)
+        val units = profileFunction.getUnits()
+        binding.units.text = if (units == Constants.MMOL) resourceHelper.gs(R.string.mmol) else resourceHelper.gs(R.string.mgdl)
+
         // temp target
         context?.let { context ->
-            val reasonList: List<String> = Lists.newArrayList(
-                MainApp.gs(R.string.manual),
-                MainApp.gs(R.string.cancel),
-                MainApp.gs(R.string.eatingsoon),
-                MainApp.gs(R.string.activity),
-                MainApp.gs(R.string.hypo)
+            if (activePlugin.activeTreatments.tempTargetFromHistory != null)
+                binding.targetCancel.visibility = View.VISIBLE
+            else
+                binding.targetCancel.visibility = View.GONE
+
+            reasonList = Lists.newArrayList(
+                resourceHelper.gs(R.string.manual),
+                resourceHelper.gs(R.string.eatingsoon),
+                resourceHelper.gs(R.string.activity),
+                resourceHelper.gs(R.string.hypo)
             )
             val adapterReason = ArrayAdapter(context, R.layout.spinner_centered, reasonList)
-            overview_temptarget_reason.adapter = adapterReason
-            overview_temptarget_reason.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: AdapterView<*>?, view: View, position: Int, id: Long) {
-                    val defaultDuration: Double
-                    val defaultTarget: Double
-                    when (reasonList[position]) {
-                        MainApp.gs(R.string.eatingsoon) -> {
-                            defaultDuration = DefaultValueHelper.determineEatingSoonTTDuration().toDouble()
-                            defaultTarget = DefaultValueHelper.determineEatingSoonTT()
-                        }
+            binding.reason.adapter = adapterReason
 
-                        MainApp.gs(R.string.activity)   -> {
-                            defaultDuration = DefaultValueHelper.determineActivityTTDuration().toDouble()
-                            defaultTarget = DefaultValueHelper.determineActivityTT()
-                        }
+            binding.targetCancel.setOnClickListener { shortClick(it) }
+            binding.eatingSoon.setOnClickListener { shortClick(it) }
+            binding.activity.setOnClickListener { shortClick(it) }
+            binding.hypo.setOnClickListener { shortClick(it) }
 
-                        MainApp.gs(R.string.hypo)       -> {
-                            defaultDuration = DefaultValueHelper.determineHypoTTDuration().toDouble()
-                            defaultTarget = DefaultValueHelper.determineHypoTT()
-                        }
-
-                        MainApp.gs(R.string.cancel)     -> {
-                            defaultDuration = 0.0
-                            defaultTarget = 0.0
-                        }
-
-                        else                            -> {
-                            defaultDuration = overview_temptarget_duration.value
-                            defaultTarget = overview_temptarget_temptarget.value
-                        }
-                    }
-                    overview_temptarget_temptarget.value = defaultTarget
-                    overview_temptarget_duration.value = defaultDuration
-                }
-
-                override fun onNothingSelected(parent: AdapterView<*>?) {}
+            binding.eatingSoon.setOnLongClickListener {
+                longClick(it)
+                return@setOnLongClickListener true
+            }
+            binding.activity.setOnLongClickListener {
+                longClick(it)
+                return@setOnLongClickListener true
+            }
+            binding.hypo.setOnLongClickListener {
+                longClick(it)
+                return@setOnLongClickListener true
             }
         }
     }
 
+    private fun shortClick(v: View) {
+        v.performLongClick()
+        if (submit()) dismiss()
+    }
+
+    private fun longClick(v: View) {
+        when (v.id) {
+            R.id.eating_soon -> {
+                binding.temptarget.value = defaultValueHelper.determineEatingSoonTT()
+                binding.duration.value = defaultValueHelper.determineEatingSoonTTDuration().toDouble()
+                binding.reason.setSelection(reasonList.indexOf(resourceHelper.gs(R.string.eatingsoon)))
+            }
+
+            R.id.activity -> {
+                binding.temptarget.value = defaultValueHelper.determineActivityTT()
+                binding.duration.value = defaultValueHelper.determineActivityTTDuration().toDouble()
+                binding.reason.setSelection(reasonList.indexOf(resourceHelper.gs(R.string.activity)))
+            }
+
+            R.id.hypo -> {
+                binding.temptarget.value = defaultValueHelper.determineHypoTT()
+                binding.duration.value = defaultValueHelper.determineHypoTTDuration().toDouble()
+                binding.reason.setSelection(reasonList.indexOf(resourceHelper.gs(R.string.hypo)))
+            }
+        }
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        _binding = null
+    }
+
     override fun submit(): Boolean {
+        if (_binding == null) return false
         val actions: LinkedList<String> = LinkedList()
-        val reason = overview_temptarget_reason.selectedItem.toString()
-        val unitResId = if (ProfileFunctions.getSystemUnits() == Constants.MGDL) R.string.mgdl else R.string.mmol
-        val target = overview_temptarget_temptarget.value
-        val duration = overview_temptarget_duration.value.toInt()
+        val reason = binding.reason.selectedItem?.toString() ?: return false
+        val unitResId = if (profileFunction.getUnits() == Constants.MGDL) R.string.mgdl else R.string.mmol
+        val target = binding.temptarget.value
+        val duration = binding.duration.value.toInt()
         if (target != 0.0 && duration != 0) {
-            actions.add(MainApp.gs(R.string.reason) + ": " + reason)
-            actions.add(MainApp.gs(R.string.nsprofileview_target_label) + ": " + Profile.toCurrentUnitsString(target) + " " + MainApp.gs(unitResId))
-            actions.add(MainApp.gs(R.string.duration) + ": " + MainApp.gs(R.string.format_mins, duration))
+            actions.add(resourceHelper.gs(R.string.reason) + ": " + reason)
+            actions.add(resourceHelper.gs(R.string.target_label) + ": " + Profile.toCurrentUnitsString(profileFunction, target) + " " + resourceHelper.gs(unitResId))
+            actions.add(resourceHelper.gs(R.string.duration) + ": " + resourceHelper.gs(R.string.format_mins, duration))
         } else {
-            actions.add(MainApp.gs(R.string.stoptemptarget))
+            actions.add(resourceHelper.gs(R.string.stoptemptarget))
         }
         if (eventTimeChanged)
-            actions.add(MainApp.gs(R.string.time) + ": " + DateUtil.dateAndTimeString(eventTime))
+            actions.add(resourceHelper.gs(R.string.time) + ": " + dateUtil.dateAndTimeString(eventTime))
 
         activity?.let { activity ->
-            OKDialog.showConfirmation(activity, MainApp.gs(R.string.careportal_temporarytarget), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), Runnable {
-                log.debug("USER ENTRY: TEMP TARGET $target duration: $duration")
+            OKDialog.showConfirmation(activity, resourceHelper.gs(R.string.careportal_temporarytarget), HtmlHelper.fromHtml(Joiner.on("<br/>").join(actions)), {
+                aapsLogger.debug("USER ENTRY: TEMP TARGET $target duration: $duration")
                 if (target == 0.0 || duration == 0) {
                     val tempTarget = TempTarget()
                         .date(eventTime)
                         .duration(0)
                         .low(0.0).high(0.0)
                         .source(Source.USER)
-                    TreatmentsPlugin.getPlugin().addToHistoryTempTarget(tempTarget)
+                    treatmentsPlugin.addToHistoryTempTarget(tempTarget)
                 } else {
                     val tempTarget = TempTarget()
                         .date(eventTime)
-                        .duration(duration.toInt())
+                        .duration(duration)
                         .reason(reason)
                         .source(Source.USER)
-                        .low(Profile.toMgdl(target, ProfileFunctions.getSystemUnits()))
-                        .high(Profile.toMgdl(target, ProfileFunctions.getSystemUnits()))
-                    TreatmentsPlugin.getPlugin().addToHistoryTempTarget(tempTarget)
+                        .low(Profile.toMgdl(target, profileFunction.getUnits()))
+                        .high(Profile.toMgdl(target, profileFunction.getUnits()))
+                    treatmentsPlugin.addToHistoryTempTarget(tempTarget)
                 }
-                if (duration == 10) SP.putBoolean(R.string.key_objectiveusetemptarget, true)
+                if (duration == 10) sp.putBoolean(R.string.key_objectiveusetemptarget, true)
             })
         }
         return true

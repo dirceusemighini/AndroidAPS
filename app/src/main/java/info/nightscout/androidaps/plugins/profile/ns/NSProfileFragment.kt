@@ -6,86 +6,105 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
-import androidx.fragment.app.Fragment
-import info.nightscout.androidaps.MainApp
+import dagger.android.support.DaggerFragment
 import info.nightscout.androidaps.R
-import info.nightscout.androidaps.plugins.bus.RxBus
-import info.nightscout.androidaps.plugins.configBuilder.ProfileFunctions
+import info.nightscout.androidaps.databinding.NsprofileFragmentBinding
+import info.nightscout.androidaps.interfaces.ProfileFunction
+import info.nightscout.androidaps.plugins.bus.RxBusWrapper
 import info.nightscout.androidaps.plugins.profile.ns.events.EventNSProfileUpdateGUI
+import info.nightscout.androidaps.plugins.treatments.TreatmentsPlugin
 import info.nightscout.androidaps.utils.DateUtil
 import info.nightscout.androidaps.utils.DecimalFormatter
 import info.nightscout.androidaps.utils.FabricPrivacy
-import info.nightscout.androidaps.utils.OKDialog
+import info.nightscout.androidaps.utils.alertDialogs.OKDialog
+import info.nightscout.androidaps.utils.extensions.plusAssign
+import info.nightscout.androidaps.utils.resources.ResourceHelper
 import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.CompositeDisposable
-import kotlinx.android.synthetic.main.close.*
-import kotlinx.android.synthetic.main.nsprofile_fragment.*
-import kotlinx.android.synthetic.main.profileviewer_fragment.*
+import javax.inject.Inject
 
-class NSProfileFragment : Fragment() {
+class NSProfileFragment : DaggerFragment() {
+
+    @Inject lateinit var treatmentsPlugin: TreatmentsPlugin
+    @Inject lateinit var rxBus: RxBusWrapper
+    @Inject lateinit var resourceHelper: ResourceHelper
+    @Inject lateinit var fabricPrivacy: FabricPrivacy
+    @Inject lateinit var profileFunction: ProfileFunction
+    @Inject lateinit var nsProfilePlugin: NSProfilePlugin
+
     private var disposable: CompositeDisposable = CompositeDisposable()
 
+    private var _binding: NsprofileFragmentBinding? = null
+
+    // This property is only valid between onCreateView and
+    // onDestroyView.
+    private val binding get() = _binding!!
+
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?,
-                              savedInstanceState: Bundle?): View? {
-        return inflater.inflate(R.layout.nsprofile_fragment, container, false)
+                              savedInstanceState: Bundle?): View {
+        _binding = NsprofileFragmentBinding.inflate(inflater, container, false)
+        return binding.root
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        close.visibility = View.GONE // not needed for fragment
+        binding.profileviewer.closeLayout.close.visibility = View.GONE // not needed for fragment
 
-        nsprofile_profileswitch.setOnClickListener {
-            val name = nsprofile_spinner.selectedItem?.toString() ?: ""
-            NSProfilePlugin.getPlugin().profile?.let { store ->
+        binding.profileswitch.setOnClickListener {
+            val name = binding.spinner.selectedItem?.toString() ?: ""
+            nsProfilePlugin.profile?.let { store ->
                 store.getSpecificProfile(name)?.let {
                     activity?.let { activity ->
-                        OKDialog.showConfirmation(activity, MainApp.gs(R.string.nsprofile),
-                            MainApp.gs(R.string.activate_profile) + ": " + name + " ?", Runnable {
-                            ProfileFunctions.doProfileSwitch(store, name, 0, 100, 0, DateUtil.now())
+                        OKDialog.showConfirmation(activity, resourceHelper.gs(R.string.nsprofile),
+                            resourceHelper.gs(R.string.activate_profile) + ": " + name + " ?", Runnable {
+                            treatmentsPlugin.doProfileSwitch(store, name, 0, 100, 0, DateUtil.now())
                         })
                     }
                 }
             }
         }
 
-        nsprofile_spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+        binding.spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(parent: AdapterView<*>?) {
-                profileview_invalidprofile.visibility = View.VISIBLE
-                profileview_noprofile.visibility = View.VISIBLE
-                profileview_units.text = ""
-                profileview_dia.text = ""
-                profileview_activeprofile.text = ""
-                profileview_ic.text = ""
-                profileview_isf.text = ""
-                profileview_basal.text = ""
-                profileview_basaltotal.text = ""
-                profileview_target.text = ""
-                nsprofile_profileswitch.visibility = View.GONE
+                if (_binding == null) return
+                binding.profileviewer.invalidprofile.visibility = View.VISIBLE
+                binding.profileviewer.noprofile.visibility = View.VISIBLE
+                binding.profileviewer.units.text = ""
+                binding.profileviewer.dia.text = ""
+                binding.profileviewer.activeprofile.text = ""
+                binding.profileviewer.ic.text = ""
+                binding.profileviewer.isf.text = ""
+                binding.profileviewer.basal.text = ""
+                binding.profileviewer.basaltotal.text = ""
+                binding.profileviewer.target.text = ""
+                binding.profileswitch.visibility = View.GONE
             }
 
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val name = nsprofile_spinner.getItemAtPosition(position).toString()
+                if (_binding == null) return
+                val name = binding.spinner.getItemAtPosition(position).toString()
 
-                nsprofile_profileswitch.visibility = View.GONE
+                binding.profileswitch.visibility = View.GONE
 
-                NSProfilePlugin.getPlugin().profile?.let { store ->
+                nsProfilePlugin.profile?.let { store ->
                     store.getSpecificProfile(name)?.let { profile ->
-                        profileview_units.text = profile.units
-                        profileview_dia.text = MainApp.gs(R.string.format_hours, profile.dia)
-                        profileview_activeprofile.text = name
-                        profileview_ic.text = profile.icList
-                        profileview_isf.text = profile.isfList
-                        profileview_basal.text = profile.basalList
-                        profileview_basaltotal.text = String.format(MainApp.gs(R.string.profile_total), DecimalFormatter.to2Decimal(profile.baseBasalSum()))
-                        profileview_target.text = profile.targetList
-                        basal_graph.show(profile)
+                        if (_binding == null) return
+                        binding.profileviewer.units.text = profile.units
+                        binding.profileviewer.dia.text = resourceHelper.gs(R.string.format_hours, profile.dia)
+                        binding.profileviewer.activeprofile.text = name
+                        binding.profileviewer.ic.text = profile.icList
+                        binding.profileviewer.isf.text = profile.isfList
+                        binding.profileviewer.basal.text = profile.basalList
+                        binding.profileviewer.basaltotal.text = String.format(resourceHelper.gs(R.string.profile_total), DecimalFormatter.to2Decimal(profile.baseBasalSum()))
+                        binding.profileviewer.target.text = profile.targetList
+                        binding.profileviewer.basalGraph.show(profile)
                         if (profile.isValid("NSProfileFragment")) {
-                            profileview_invalidprofile.visibility = View.GONE
-                            nsprofile_profileswitch.visibility = View.VISIBLE
+                            binding.profileviewer.invalidprofile.visibility = View.GONE
+                            binding.profileswitch.visibility = View.VISIBLE
                         } else {
-                            profileview_invalidprofile.visibility = View.VISIBLE
-                            nsprofile_profileswitch.visibility = View.GONE
+                            binding.profileviewer.invalidprofile.visibility = View.VISIBLE
+                            binding.profileswitch.visibility = View.GONE
                         }
                     }
                 }
@@ -96,11 +115,10 @@ class NSProfileFragment : Fragment() {
     @Synchronized
     override fun onResume() {
         super.onResume()
-        disposable.add(RxBus
+        disposable += rxBus
             .toObservable(EventNSProfileUpdateGUI::class.java)
             .observeOn(AndroidSchedulers.mainThread())
-            .subscribe({ updateGUI() }, { FabricPrivacy.logException(it) })
-        )
+            .subscribe({ updateGUI() }, { fabricPrivacy.logException(it) })
         updateGUI()
     }
 
@@ -111,20 +129,28 @@ class NSProfileFragment : Fragment() {
     }
 
     @Synchronized
-    fun updateGUI() {
-        if (profileview_noprofile == null) return
-        profileview_noprofile.visibility = View.VISIBLE
+    override fun onDestroyView() {
+        super.onDestroyView()
+        _binding = null
+    }
 
-        NSProfilePlugin.getPlugin().profile?.let { profileStore ->
-            val profileList = profileStore.getProfileList()
-            val adapter = ArrayAdapter(context!!, R.layout.spinner_centered, profileList)
-            nsprofile_spinner.adapter = adapter
-            // set selected to actual profile
-            for (p in profileList.indices) {
-                if (profileList[p] == ProfileFunctions.getInstance().profileName)
-                    nsprofile_spinner.setSelection(p)
+    @Synchronized
+    fun updateGUI() {
+        if (_binding == null) return
+        binding.profileviewer.noprofile.visibility = View.VISIBLE
+
+        nsProfilePlugin.profile?.let { profileStore ->
+            context?.let { context ->
+                val profileList = profileStore.getProfileList()
+                val adapter = ArrayAdapter(context, R.layout.spinner_centered, profileList)
+                binding.spinner.adapter = adapter
+                // set selected to actual profile
+                for (p in profileList.indices) {
+                    if (profileList[p] == profileFunction.getProfileName())
+                        binding.spinner.setSelection(p)
+                }
+                binding.profileviewer.noprofile.visibility = View.GONE
             }
-            profileview_noprofile.visibility = View.GONE
         }
     }
 }
